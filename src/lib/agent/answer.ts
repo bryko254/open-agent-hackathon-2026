@@ -111,13 +111,31 @@ export function buildAnswer(goal: string, hits: RawHit[], priorLimits: string[])
   }
 
   const supportIds = unique(claims.flatMap((claim) => claim.evidenceIds));
-  const confidence = confidenceFor(supportIds.length, claims.length);
-  const confidenceReason = reasonFor(confidence, supportIds);
+  let confidence = confidenceFor(supportIds.length, claims.length);
+  let confidenceReason = reasonFor(confidence, supportIds);
+  const askedForMail = hits.some((hit) => hit.source === "gmail_stub");
+  const githubClaim = claims.find((claim) =>
+    claim.evidenceIds.some((id) => hits.some((hit) => hit.id === id && hit.source === "github_search"))
+  );
+  const wantsRepos = /\b(github|repositor|readme)\b/i.test(goal);
 
-  const top = claims[0];
-  const outcome = top
+  let top = claims[0];
+  if (!askedForMail && wantsRepos && githubClaim) top = githubClaim;
+
+  let outcome = top
     ? `${clip(top.statement, 280)} [${top.evidenceIds[0]}]`
     : "Nothing fetched overlapped this goal, so there is no supported outcome. Stub connectors were excluded.";
+
+  if (askedForMail) {
+    if (confidence === "high") confidence = "medium";
+    confidenceReason = top
+      ? "Medium at most: the mailbox was not read, so email cannot be proved. Live cards are public pages or repositories that share words with the goal, not messages from an inbox."
+      : "Low because the mailbox was not read and no live public source overlapped the goal. The Gmail card is a stub and is excluded.";
+    if (!top) confidence = "low";
+    outcome = top
+      ? `No email was read, so an inbox result is unproved. Public overlap only: ${clip(top.statement, 200)} [${top.evidenceIds[0]}]`
+      : "No email was read, and no live public source overlapped the goal, so there is nothing to prove.";
+  }
 
   const summary = renderSummary(outcome, confidenceReason, claims, limitations);
 

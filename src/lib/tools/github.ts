@@ -120,13 +120,14 @@ function hitsFromRepos(repos: GhRepo[]): GitHubHit[] {
   for (const repo of repos) {
     if (!repo.full_name || !repo.html_url) continue;
     const stars = repo.stargazers_count ?? 0;
-    const language = repo.language ? ` and is mainly ${repo.language}` : "";
+    const starLabel = stars === 1 ? "star" : "stars";
+    const language = repo.language ? `, mainly ${repo.language}` : "";
     const description = repo.description?.trim() || "The API returned no description.";
     hits.push({
       kind: "repo",
       title: repo.full_name,
       url: repo.html_url,
-      text: `${repo.full_name} (${stars} stars${language}) — ${description}`,
+      text: `${repo.full_name} (${stars} ${starLabel}${language}) — ${description}`,
     });
   }
   return hits;

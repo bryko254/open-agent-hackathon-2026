@@ -33,7 +33,7 @@ These are the same four chips as the UI.
 What does Railway recommend for deploying a Next.js app, and why would a Dockerfile or Railpack matter? Cite the docs.
 ```
 
-Expect live docs, a quoted deploy sentence, and a confidence reason. No key required.
+Expect live docs, confidence **high**, and two quotes from Railway's Next.js guide: Railpack (or Nixpacks) builds the app with zero configuration, and Railway detects a Dockerfile and uses it to build. A third card is a Next.js definition. The plan should also say Wikipedia was skipped for the bare word "Railway" (that article is about trains). No key required.
 
 ### Cite a docs URL
 
