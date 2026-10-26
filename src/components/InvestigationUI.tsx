@@ -63,7 +63,7 @@ function Cited({ text }: { text: string }) {
           <a
             key={`${part}-${index}`}
             href={`#evidence-${part.slice(1, -1)}`}
-            className="mx-0.5 inline-flex rounded bg-indigo-500/20 px-1.5 py-0.5 font-mono text-[11px] text-indigo-200 hover:bg-indigo-500/30"
+            className="mx-0.5 inline-flex rounded bg-cyan-400/15 px-1.5 py-0.5 font-mono text-[11px] text-cyan-100 hover:bg-cyan-400/25"
           >
             {part}
           </a>
@@ -120,7 +120,7 @@ export default function InvestigationUI() {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10 sm:px-6">
       <header className="space-y-3">
-        <div className="inline-flex items-center gap-2 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-300 ring-1 ring-indigo-500/30">
+        <div className="inline-flex items-center gap-2 rounded-full bg-teal-400/10 px-3 py-1 text-xs font-medium text-teal-200 ring-1 ring-teal-400/30">
           Open Agent Hackathon 2026 · Track 02 · The Agent That Can Explain Why
         </div>
         <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Evidence Agent</h1>
@@ -140,7 +140,7 @@ export default function InvestigationUI() {
           value={goal}
           onChange={(event) => setGoal(event.target.value)}
           rows={4}
-          className="w-full resize-y rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none ring-indigo-500/40 placeholder:text-slate-600 focus:ring-2"
+          className="w-full resize-y rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none ring-cyan-400/40 placeholder:text-slate-600 focus:ring-2"
           placeholder="What should the agent investigate, and what would count as proof?"
         />
         <div className="mt-3 flex flex-wrap gap-2">
@@ -153,7 +153,7 @@ export default function InvestigationUI() {
                 onClick={() => setGoal(example.goal)}
                 className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
                   selected
-                    ? "bg-indigo-500/20 text-indigo-100 ring-1 ring-indigo-400/40"
+                    ? "bg-teal-400/15 text-teal-50 ring-1 ring-teal-300/40"
                     : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
                 }`}
               >
@@ -167,7 +167,7 @@ export default function InvestigationUI() {
             type="button"
             onClick={run}
             disabled={loading || goal.trim().length < 3}
-            className="inline-flex items-center justify-center rounded-xl bg-indigo-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center justify-center rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? "Investigating…" : "Run investigation"}
           </button>
@@ -194,7 +194,7 @@ export default function InvestigationUI() {
               <li key={label} className="flex items-center gap-3 text-sm">
                 <span
                   className={`h-2.5 w-2.5 rounded-full ${
-                    index < stage ? "bg-emerald-400" : index === stage ? "animate-pulse bg-indigo-400" : "bg-white/15"
+                    index < stage ? "bg-emerald-400" : index === stage ? "animate-pulse bg-cyan-400" : "bg-white/15"
                   }`}
                 />
                 <span className={index === stage ? "text-slate-100" : "text-slate-500"}>{label}</span>
@@ -206,9 +206,9 @@ export default function InvestigationUI() {
 
       {result && (
         <div className="space-y-6">
-          <section className="rounded-2xl border border-indigo-400/20 bg-indigo-500/[0.06] p-5">
+          <section className="rounded-2xl border border-teal-300/25 bg-teal-400/[0.07] p-5">
             <div className="flex flex-wrap items-center gap-3">
-              <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">
+              <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-100">
                 Concrete outcome
               </h2>
               <span className={`text-xs font-semibold uppercase tracking-wide ${confidenceTone(result.confidence)}`}>
@@ -251,7 +251,7 @@ export default function InvestigationUI() {
                 ) : (
                   <ul className="mt-4 space-y-3">
                     {result.claims.map((claim, index) => (
-                      <li key={`${claim.evidenceIds.join("-")}-${index}`} className="rounded-xl border border-white/5 bg-slate-950/40 p-4">
+                      <li key={`${claim.evidenceIds.join("-")}-${index}`} className="rounded-xl border border-white/10 bg-black/25 p-4">
                         <p className="text-sm leading-relaxed text-slate-100">
                           <Cited text={`${claim.statement} ${claim.evidenceIds.map((id) => `[${id}]`).join("")}`} />
                         </p>
@@ -278,10 +278,10 @@ export default function InvestigationUI() {
                       <li
                         key={item.id}
                         id={`evidence-${item.id}`}
-                        className="scroll-mt-6 rounded-xl border border-white/5 bg-slate-950/40 p-4"
+                        className="scroll-mt-6 rounded-xl border border-white/10 bg-black/25 p-4"
                       >
                         <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 font-mono text-xs text-indigo-200">
+                          <span className="rounded bg-cyan-400/15 px-1.5 py-0.5 font-mono text-xs text-cyan-100">
                             {item.id}
                           </span>
                           <span
@@ -296,7 +296,7 @@ export default function InvestigationUI() {
                           <span
                             className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${
                               item.supportsAnswer
-                                ? "bg-indigo-500/15 text-indigo-200 ring-indigo-500/30"
+                                ? "bg-cyan-400/15 text-cyan-100 ring-cyan-300/30"
                                 : "bg-white/5 text-slate-400 ring-white/10"
                             }`}
                           >
@@ -315,7 +315,7 @@ export default function InvestigationUI() {
                             href={item.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="mt-2 inline-block break-all text-xs text-indigo-300 hover:underline"
+                            className="mt-2 inline-block break-all text-xs text-cyan-300 hover:text-cyan-200 hover:underline"
                           >
                             {item.url}
                           </a>
@@ -339,7 +339,7 @@ export default function InvestigationUI() {
                 <h2 className="text-lg font-semibold text-white">Reasoning steps</h2>
                 <ol className="mt-4 space-y-3">
                   {result.steps.map((step) => (
-                    <li key={step.id} className="rounded-xl border border-white/5 bg-slate-950/40 p-3">
+                    <li key={step.id} className="rounded-xl border border-white/10 bg-black/25 p-3">
                       <div className="mb-1 flex flex-wrap items-center gap-2">
                         <span className="font-mono text-xs text-slate-500">#{step.index}</span>
                         <span
@@ -352,7 +352,7 @@ export default function InvestigationUI() {
                       <p className="text-sm font-medium text-slate-100">{step.title}</p>
                       <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-500">{step.detail}</p>
                       {step.evidenceIds && step.evidenceIds.length > 0 && (
-                        <p className="mt-2 text-[11px] text-indigo-300">
+                        <p className="mt-2 text-[11px] text-cyan-300">
                           {step.evidenceIds.map((id) => `[${id}]`).join(" ")}
                         </p>
                       )}
@@ -380,7 +380,7 @@ export default function InvestigationUI() {
                 <h2 className="text-lg font-semibold text-white">Agent notes</h2>
                 <ul className="mt-3 space-y-2">
                   {result.notes.map((note, index) => (
-                    <li key={`${index}-${note.slice(0, 24)}`} className="whitespace-pre-wrap rounded-lg bg-slate-950/50 px-3 py-2 text-xs leading-relaxed text-slate-400">
+                    <li key={`${index}-${note.slice(0, 24)}`} className="whitespace-pre-wrap rounded-lg bg-black/30 px-3 py-2 text-xs leading-relaxed text-slate-400">
                       {note}
                     </li>
                   ))}
