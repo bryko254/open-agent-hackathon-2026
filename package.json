@@ -2,7 +2,7 @@
   "name": "evidence-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Evidence Agent — Open Agent Hackathon 2026 Track 02 Autonomous Agent",
+  "description": "Evidence Agent — Open Agent Hackathon 2026 Track 02 (The Agent That Can Explain Why)",
   "license": "MIT",
   "scripts": {
     "dev": "next dev",

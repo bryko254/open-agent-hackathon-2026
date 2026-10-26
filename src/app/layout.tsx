@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Evidence Agent · Open Agent Hackathon 2026",
+  title: "Evidence Agent · The Agent That Can Explain Why",
   description:
-    "Track 02 Autonomous Agent — multi-step investigation with tools, citations, and concrete outcomes.",
+    "Open Agent Hackathon 2026 Track 02. An agent that investigates a goal, cites evidence, and explains why that evidence supports the outcome.",
 };
 
 export default function RootLayout({
@@ -30,7 +30,7 @@ export default function RootLayout({
       >
         {children}
         <footer className="border-t border-white/5 py-6 text-center text-xs text-slate-600">
-          Evidence Agent · MIT · Open Agent Hackathon 2026 Track 02 ·{" "}
+          Evidence Agent · Track 02 · The Agent That Can Explain Why ·{" "}
           <a
             className="text-slate-500 hover:text-slate-300"
             href="https://github.com/bryko254/open-agent-hackathon-2026"

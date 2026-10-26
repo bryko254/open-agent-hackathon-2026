@@ -8,22 +8,17 @@ export interface GitHubStubResult {
 }
 
 /**
- * Stub GitHub connector — shows the investigation tool shape without tokens.
+ * Labeled fallback when the GitHub API cannot be used.
+ * The sample list is intentionally empty so a failure cannot be quoted as a repo.
  */
 export function githubStubSearch(query: string): GitHubStubResult {
   return {
     connected: false,
     message:
-      "GitHub connector is stubbed for this demo. Add a PAT or GitHub App for live search.",
+      "Labeled stub: no live GitHub results are available for this run. Do not treat any repository name as a finding. Set GITHUB_TOKEN, GH_TOKEN, or GITHUB_PAT if the public API is rate-limited.",
     sample: {
       query,
-      repos: [
-        {
-          full_name: "example/stub-match",
-          description: `Stub repo related to "${query.slice(0, 40)}" — not a live API result.`,
-          stars: 0,
-        },
-      ],
+      repos: [],
     },
   };
 }

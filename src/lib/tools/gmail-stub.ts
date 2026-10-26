@@ -15,15 +15,15 @@ export function gmailStubSearch(query: string): GmailStubResult {
   return {
     connected: false,
     message:
-      "Gmail connector is stubbed for this demo. Connect OAuth + scopes to search real mail.",
+      "Labeled stub: no mailbox was accessed. Gmail OAuth is not configured, so there are no email findings. A sample subject is not evidence.",
     sample: {
       query,
       hits: [
         {
-          subject: "[stub] Matching thread for: " + query.slice(0, 60),
-          from: "noreply@example.com",
+          subject: "[stub] No mailbox was read",
+          from: "not-a-real-sender@example.com",
           snippet:
-            "Stub result only — no mailbox was accessed. See FAILURE_MODES.md.",
+            "Stub result only. No inbox was queried. See FAILURE_MODES.md.",
         },
       ],
     },
