@@ -3,7 +3,8 @@ export type ToolName =
   | "notes_write"
   | "notes_read"
   | "gmail_stub"
-  | "github_stub";
+  | "github_stub"
+  | "github_search";
 
 export type StepStatus = "pending" | "running" | "done" | "error" | "skipped";
 
@@ -14,6 +15,16 @@ export interface EvidenceCitation {
   snippet: string;
   source: ToolName | "memory" | "llm";
   fetchedAt: string;
+  live: boolean;
+  /** False for stubs and for pages that do not overlap the goal. */
+  supportsAnswer: boolean;
+  why: string;
+}
+
+export interface Claim {
+  statement: string;
+  evidenceIds: string[];
+  why: string;
 }
 
 export interface AgentStep {
@@ -34,10 +45,14 @@ export interface InvestigationResult {
   outcome: string;
   summary: string;
   confidence: "low" | "medium" | "high";
+  confidenceReason: string;
+  claims: Claim[];
+  limitations: string[];
   steps: AgentStep[];
   evidence: EvidenceCitation[];
   notes: string[];
   mode: "heuristic" | "llm";
+  githubMode: "live" | "stub" | "skipped";
   durationMs: number;
   createdAt: string;
 }

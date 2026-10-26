@@ -1,57 +1,80 @@
+import { buildAnswer, clampConfidence, type RawHit } from "@/lib/agent/answer";
+import { chatCompletion, hasLlm } from "@/lib/agent/llm";
+import { planInvestigation } from "@/lib/agent/plan";
+import type { AgentStep, Claim, InvestigationResult } from "@/lib/agent/types";
+import { investigateGithub } from "@/lib/tools/github";
+import { gmailStubSearch } from "@/lib/tools/gmail-stub";
 import { NotesMemory } from "@/lib/tools/notes";
 import { webFetch } from "@/lib/tools/web-fetch";
-import { gmailStubSearch } from "@/lib/tools/gmail-stub";
-import { githubStubSearch } from "@/lib/tools/github-stub";
-import { chatCompletion, hasLlm } from "@/lib/agent/llm";
-import { researchTargets, wantsEmail, wantsGithub } from "@/lib/agent/urls";
-import type {
-  AgentStep,
-  EvidenceCitation,
-  InvestigationResult,
-} from "@/lib/agent/types";
 
 function now() {
   return new Date().toISOString();
 }
 
-function sid(prefix: string, i: number) {
-  return `${prefix}-${i}`;
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
 }
 
-function snippet(text: string, n = 280): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  return t.length <= n ? t : t.slice(0, n - 1) + "…";
+interface LlmAnswer {
+  outcome?: string;
+  summary?: string;
+  confidence?: InvestigationResult["confidence"];
+  claims?: Claim[];
+}
+
+function parseLlm(raw: string): LlmAnswer | null {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[0]) as LlmAnswer;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function knownClaims(claims: Claim[] | undefined, ids: Set<string>): Claim[] {
+  if (!claims) return [];
+  return claims
+    .filter((claim) => claim && typeof claim.statement === "string" && Array.isArray(claim.evidenceIds))
+    .map((claim) => ({
+      statement: claim.statement.trim(),
+      evidenceIds: claim.evidenceIds.filter((id) => ids.has(id)),
+      why: typeof claim.why === "string" ? claim.why.trim() : "",
+    }))
+    .filter((claim) => claim.statement && claim.evidenceIds.length > 0 && claim.why);
 }
 
 /**
- * Multi-step Evidence Agent loop:
- * plan → tool calls (web + notes + optional stubs) → synthesize with citations.
+ * Multi-step Evidence Agent:
+ * plan (including rejected sources) → fetch → optional GitHub / Gmail → cite why.
  */
-export async function runInvestigation(
-  goal: string,
-  maxSteps = 8
-): Promise<InvestigationResult> {
+export async function runInvestigation(goal: string, maxSteps = 8): Promise<InvestigationResult> {
   const started = Date.now();
   const createdAt = now();
   const notes = new NotesMemory();
   const steps: AgentStep[] = [];
-  const evidence: EvidenceCitation[] = [];
-  let evidenceCounter = 0;
-  const mode = hasLlm() ? "llm" : "heuristic";
+  const webBudget = Math.min(3, Math.max(1, maxSteps - 4));
 
   const pushStep = (
-    partial: Omit<AgentStep, "id" | "index" | "status"> & {
-      status?: AgentStep["status"];
-    }
+    partial: Omit<AgentStep, "id" | "index" | "status"> & { status?: AgentStep["status"] }
   ): AgentStep => {
     const step: AgentStep = {
-      id: sid("step", steps.length + 1),
+      id: `step-${steps.length + 1}`,
       index: steps.length + 1,
       status: partial.status || "running",
-      ...partial,
       tool: partial.tool,
       title: partial.title,
       detail: partial.detail,
+      startedAt: partial.startedAt,
+      finishedAt: partial.finishedAt,
+      evidenceIds: partial.evidenceIds,
+      error: partial.error,
     };
     steps.push(step);
     return step;
@@ -61,243 +84,238 @@ export async function runInvestigation(
     Object.assign(step, patch, { finishedAt: now() });
   };
 
-  // --- Step 1: Plan ---
+  const plan = await planInvestigation(goal, webBudget);
+  const planDetail = [
+    plan.sources.length
+      ? plan.sources.map((source, index) => `${index + 1}. ${source.url}\n   ${source.reason}`).join("\n")
+      : "No web URL was selected.",
+    plan.rejected.length ? `Rejected:\n${plan.rejected.map((reason) => `- ${reason}`).join("\n")}` : "",
+    `Gmail: ${plan.useGmail ? "requested, stub only (no OAuth)." : "not requested."}`,
+    `GitHub: ${plan.useGithub ? "requested." : "not requested."}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   const planStep = pushStep({
     tool: "plan",
-    title: "Plan investigation",
-    detail: `Goal: ${goal}`,
+    title: "Plan sources and reject weak ones",
+    detail: planDetail,
     startedAt: now(),
   });
+  finish(planStep, { status: "done", detail: planDetail });
+  notes.write(`Goal: ${goal}`);
+  notes.write(planDetail);
 
-  const urls = researchTargets(goal, Math.min(3, maxSteps - 3));
-  const useGmail = wantsEmail(goal);
-  const useGithub = wantsGithub(goal);
+  const raw: RawHit[] = [];
+  const limitations = [...plan.rejected];
+  let evidenceCounter = 0;
+  const nextId = () => {
+    evidenceCounter += 1;
+    return `E${evidenceCounter}`;
+  };
 
-  notes.write(`Investigation goal: ${goal}`);
-  notes.write(
-    `Plan: fetch ${urls.length} source(s)` +
-      (useGmail ? ", stub Gmail" : "") +
-      (useGithub ? ", stub GitHub" : "") +
-      `, then synthesize with citations. Mode=${mode}.`
-  );
-
-  finish(planStep, {
-    status: "done",
-    detail: `Planned ${urls.length} web fetch(es)` +
-      (useGmail ? " + Gmail stub" : "") +
-      (useGithub ? " + GitHub stub" : "") +
-      `.`,
-    evidenceIds: [],
-  });
-
-  // --- Web fetches ---
-  for (const url of urls) {
-    if (steps.length >= maxSteps - 1) break;
-
+  for (const source of plan.sources) {
     const step = pushStep({
       tool: "web_fetch",
-      title: `Fetch evidence: ${new URL(url).hostname}`,
-      detail: url,
+      title: `Fetch ${hostnameOf(source.url)}`,
+      detail: source.url,
       startedAt: now(),
     });
-
-    const result = await webFetch(url);
-    if (result.ok && result.text) {
-      evidenceCounter += 1;
-      const id = `E${evidenceCounter}`;
-      evidence.push({
+    const result = await webFetch(source.url);
+    if (result.ok && result.text.trim().length >= 80) {
+      const id = nextId();
+      raw.push({
         id,
-        title: result.title,
-        url: result.url,
-        snippet: snippet(result.text),
+        title: result.title || hostnameOf(source.url),
+        url: result.citationUrl || result.url,
+        text: result.text,
         source: "web_fetch",
         fetchedAt: now(),
+        live: true,
       });
-      notes.write(`[${id}] ${result.title} — ${snippet(result.text, 160)}`);
       finish(step, {
         status: "done",
-        detail: `Retrieved ${result.text.length} chars from ${result.url}`,
+        detail: `${source.reason}\nRetrieved ${result.text.length} chars from ${result.url}.`,
         evidenceIds: [id],
       });
     } else {
-      notes.write(`Fetch failed for ${url}: ${result.error || "unknown"}`);
-      finish(step, {
-        status: "error",
-        detail: `Failed: ${result.error || "unknown"}`,
-        error: result.error,
-      });
+      const error = result.error || "No readable text";
+      limitations.push(`Fetch failed for ${source.url}: ${error}.`);
+      finish(step, { status: "error", detail: `${source.reason}\nFailed: ${error}.`, error });
     }
-
-    const noteStep = pushStep({
-      tool: "notes_write",
-      title: "Update investigation notes",
-      detail: `Persisted findings after ${new URL(url).hostname}`,
-      startedAt: now(),
-      status: "done",
-      finishedAt: now(),
-    });
-    void noteStep;
   }
 
-  // --- Optional stubs ---
-  if (useGmail && steps.length < maxSteps) {
+  let githubMode: InvestigationResult["githubMode"] = "skipped";
+  if (plan.useGithub) {
+    const github = await investigateGithub(goal);
+    githubMode = github.mode;
     const step = pushStep({
-      tool: "gmail_stub",
-      title: "Gmail connector (stub)",
-      detail: `Search mailbox for: ${goal.slice(0, 80)}`,
+      tool: github.mode === "live" ? "github_search" : "github_stub",
+      title: github.mode === "live" ? "GitHub search (live API)" : "GitHub connector (labeled stub)",
+      detail: github.message,
       startedAt: now(),
     });
+
+    if (github.mode === "stub") {
+      const id = nextId();
+      raw.push({
+        id,
+        title: "STUB — GitHub was not queried successfully",
+        text: github.message,
+        source: "github_stub",
+        fetchedAt: now(),
+        live: false,
+        whyHint: github.message,
+      });
+      finish(step, { status: "error", detail: github.message, error: github.message, evidenceIds: [id] });
+    } else if (github.hits.length === 0) {
+      limitations.push(github.message);
+      finish(step, { status: "done", detail: github.message });
+    } else {
+      const ids: string[] = [];
+      for (const hit of github.hits) {
+        const id = nextId();
+        ids.push(id);
+        raw.push({
+          id,
+          title: hit.title,
+          url: hit.url || undefined,
+          text: hit.text,
+          source: "github_search",
+          fetchedAt: now(),
+          live: true,
+          forceQuote: true,
+          whyHint:
+            hit.kind === "readme"
+              ? `The goal asks about the README. This text is the README body returned by the GitHub API for ${hit.title.replace(/^README · /, "")}.`
+              : `Live GitHub API record for "${github.query}". Name, stars, and description are copied from that payload.`,
+        });
+      }
+      finish(step, { status: "done", detail: github.message, evidenceIds: ids });
+    }
+  }
+
+  if (plan.useGmail) {
     const stub = gmailStubSearch(goal);
-    notes.write(`Gmail stub: ${stub.message}`);
-    evidenceCounter += 1;
-    const id = `E${evidenceCounter}`;
-    evidence.push({
+    const id = nextId();
+    raw.push({
       id,
-      title: "Gmail stub sample hit",
-      snippet: stub.sample.hits[0]?.snippet || stub.message,
+      title: "STUB — Gmail mailbox was not read",
+      text: stub.message,
       source: "gmail_stub",
       fetchedAt: now(),
+      live: false,
+      whyHint: stub.message,
     });
-    finish(step, {
-      status: "done",
-      detail: stub.message,
-      evidenceIds: [id],
-    });
-  }
-
-  if (useGithub && steps.length < maxSteps) {
     const step = pushStep({
-      tool: "github_stub",
-      title: "GitHub connector (stub)",
-      detail: `Search repos for: ${goal.slice(0, 80)}`,
-      startedAt: now(),
-    });
-    const stub = githubStubSearch(goal);
-    notes.write(`GitHub stub: ${stub.message}`);
-    evidenceCounter += 1;
-    const id = `E${evidenceCounter}`;
-    evidence.push({
-      id,
-      title: stub.sample.repos[0]?.full_name || "GitHub stub",
-      snippet: stub.sample.repos[0]?.description || stub.message,
-      source: "github_stub",
-      fetchedAt: now(),
-    });
-    finish(step, {
-      status: "done",
+      tool: "gmail_stub",
+      title: "Gmail connector (labeled stub)",
       detail: stub.message,
+      startedAt: now(),
+      status: "done",
       evidenceIds: [id],
     });
+    finish(step, { status: "done", detail: stub.message, evidenceIds: [id] });
   }
 
-  // --- Read notes ---
-  const readStep = pushStep({
+  const built = buildAnswer(goal, raw, limitations);
+
+  for (const item of built.evidence) {
+    const tag = item.supportsAnswer ? "cite" : "exclude";
+    notes.write(`[${item.id}] ${tag} ${item.title} — ${item.snippet}`);
+  }
+
+  const notesWrite = pushStep({
+    tool: "notes_write",
+    title: "Save cited and excluded notes",
+    detail: `Recorded ${built.evidence.length} evidence note(s) before the write-up.`,
+    startedAt: now(),
+  });
+  finish(notesWrite, {
+    status: "done",
+    detail: `Recorded ${built.evidence.length} evidence note(s): ${built.evidence.map((item) => item.id).join(", ") || "none"}.`,
+  });
+
+  const allNotes = notes.read();
+  const notesRead = pushStep({
     tool: "notes_read",
     title: "Read investigation memory",
-    detail: "Compile notes before synthesis",
+    detail: "Compile notes before the final explanation.",
     startedAt: now(),
   });
-  const allNotes = notes.read();
-  finish(readStep, {
-    status: "done",
-    detail: `${allNotes.length} note(s) in memory`,
-  });
+  finish(notesRead, { status: "done", detail: `${allNotes.length} note(s) in memory.` });
 
-  // --- Synthesize ---
-  const synth = pushStep({
-    tool: "synthesize",
-    title: "Synthesize evidence-backed answer",
-    detail: "Produce outcome + citations",
-    startedAt: now(),
-  });
+  let mode: InvestigationResult["mode"] = "heuristic";
+  let outcome = built.outcome;
+  let summary = built.summary;
+  let claims = built.claims;
+  let confidence = built.confidence;
+  let confidenceReason = built.confidenceReason;
+  const finalLimits = [...built.limitations];
 
-  const citationBlock = evidence
-    .map((e) => `[${e.id}] ${e.title}${e.url ? ` (${e.url})` : ""}: ${e.snippet}`)
-    .join("\n");
-
-  let summary = "";
-  let outcome = "";
-
-  if (mode === "llm") {
-    const llmOut = await chatCompletion(
-      "You are Evidence Agent. Answer using ONLY the provided evidence. Cite as [E1], [E2], etc. Return JSON with keys: outcome (1 short sentence concrete result), summary (2-4 paragraphs with citations), confidence (low|medium|high).",
-      `GOAL:\n${goal}\n\nEVIDENCE:\n${citationBlock}\n\nNOTES:\n${allNotes.join("\n")}`
+  if (hasLlm()) {
+    const evidenceBlock = built.evidence
+      .map(
+        (item) =>
+          `[${item.id}] supportsAnswer=${item.supportsAnswer} ${item.title}${item.url ? ` (${item.url})` : ""}\n${item.snippet}`
+      )
+      .join("\n\n");
+    const llmRaw = await chatCompletion(
+      "You are Evidence Agent. Use ONLY the evidence. Every factual sentence must cite ids like [E1]. Ignore items with supportsAnswer=false. Return JSON with keys outcome (one concrete sentence that includes a citation), summary (markdown), confidence (low|medium|high), claims (array of {statement, evidenceIds, why}). The why field must say why that evidence supports the statement.",
+      `GOAL:\n${goal}\n\nEVIDENCE:\n${evidenceBlock}\n\nNOTES:\n${allNotes.join("\n")}`
     );
+    const parsed = llmRaw ? parseLlm(llmRaw) : null;
+    const ids = new Set(built.evidence.map((item) => item.id));
+    const llmClaims = knownClaims(parsed?.claims, ids);
+    const blob = `${parsed?.outcome || ""}\n${parsed?.summary || ""}`;
+    const cites = [...ids].some((id) => blob.includes(`[${id}]`)) || llmClaims.length > 0;
 
-    if (llmOut) {
-      try {
-        const jsonMatch = llmOut.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]) as {
-            outcome?: string;
-            summary?: string;
-            confidence?: string;
-          };
-          outcome = parsed.outcome || "";
-          summary = parsed.summary || "";
-        } else {
-          summary = llmOut;
-          outcome = "Completed LLM synthesis over collected evidence.";
-        }
-      } catch {
-        summary = llmOut;
-        outcome = "Completed LLM synthesis over collected evidence.";
+    if (parsed && cites) {
+      mode = "llm";
+      if (parsed.outcome && [...ids].some((id) => parsed.outcome!.includes(`[${id}]`))) {
+        outcome = parsed.outcome.trim();
       }
+      if (parsed.summary && [...ids].some((id) => parsed.summary!.includes(`[${id}]`))) {
+        summary = parsed.summary.trim();
+      }
+      if (llmClaims.length > 0) claims = llmClaims;
+      const wanted = parsed.confidence;
+      if (wanted === "low" || wanted === "medium" || wanted === "high") {
+        confidence = clampConfidence(wanted, built.confidence);
+      }
+      confidenceReason = `${built.confidenceReason} The wording came from the LLM. Confidence was not raised above the evidence ceiling (${built.confidence}).`;
+    } else {
+      finalLimits.push(
+        "OPENAI_API_KEY is set, but the model reply was missing or did not cite [E#] ids. The heuristic explanation was kept."
+      );
     }
   }
 
-  if (!summary) {
-    const live = evidence.filter((e) => e.source === "web_fetch");
-    const stubs = evidence.filter((e) =>
-      e.source === "gmail_stub" || e.source === "github_stub"
-    );
-
-    outcome =
-      live.length > 0
-        ? `Gathered ${live.length} live web source(s) and ${stubs.length} stub connector hit(s) addressing: ${goal.slice(0, 100)}`
-        : `Investigation completed with limited live evidence for: ${goal.slice(0, 100)}`;
-
-    summary =
-      `## Answer\n\n` +
-      `Based on a multi-step investigation for **${goal}**, the agent collected ` +
-      `${evidence.length} evidence item(s).\n\n` +
-      (live.length
-        ? live
-            .map(
-              (e) =>
-                `### ${e.title}\n\n${e.snippet}\n\nCitation: [${e.id}]${e.url ? ` ${e.url}` : ""}`
-            )
-            .join("\n\n")
-        : `_No successful web fetches — see steps for errors and FAILURE_MODES.md._`) +
-      (stubs.length
-        ? `\n\n### Connector stubs\n\n` +
-          stubs.map((e) => `- [${e.id}] ${e.title}: ${e.snippet}`).join("\n")
-        : "") +
-      `\n\n### Concrete outcome\n\n${outcome}`;
-  }
-
-  const confidence =
-    evidence.filter((e) => e.source === "web_fetch").length >= 2
-      ? "high"
-      : evidence.some((e) => e.source === "web_fetch")
-        ? "medium"
-        : "low";
-
+  const synth = pushStep({
+    tool: "synthesize",
+    title: "Explain the outcome from citations",
+    detail: "Tie each finding to an evidence id and set confidence.",
+    startedAt: now(),
+  });
   finish(synth, {
     status: "done",
-    detail: `Synthesis complete (${mode}, confidence=${confidence})`,
-    evidenceIds: evidence.map((e) => e.id),
+    detail: `Synthesis complete (${mode}, confidence=${confidence}).`,
+    evidenceIds: built.evidence.filter((item) => item.supportsAnswer).map((item) => item.id),
   });
 
   return {
     goal,
     outcome,
     summary,
-    confidence: confidence as InvestigationResult["confidence"],
+    confidence,
+    confidenceReason,
+    claims,
+    limitations: finalLimits,
     steps,
-    evidence,
-    notes: allNotes,
+    evidence: built.evidence,
+    notes: notes.read(),
     mode,
+    githubMode,
     durationMs: Date.now() - started,
     createdAt,
   };
