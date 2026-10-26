@@ -7,7 +7,15 @@ Solo submission by [bryko254](https://github.com/bryko254)
 
 Repo: https://github.com/bryko254/open-agent-hackathon-2026
 
-Judge walkthrough: [DEMO.md](./DEMO.md). Honest edges: [FAILURE_MODES.md](./FAILURE_MODES.md).
+## Live demo
+
+Judges start here. The app is already deployed.
+
+1. Open https://evidence-agent-ten.vercel.app
+2. Confirm https://evidence-agent-ten.vercel.app/api/health returns `{ "ok": true }`.
+3. Run the prefilled **Railway + Next.js** sample.
+
+Walkthrough: [DEMO.md](./DEMO.md). Honest edges: [FAILURE_MODES.md](./FAILURE_MODES.md). Railway hosting below is an optional alternative.
 
 ## Track story
 
@@ -65,7 +73,9 @@ See [`.env.example`](./.env.example). None of these belong in git.
 
 Without a GitHub token the agent still calls the **public** Search API. If GitHub returns 403 or 429, the step is a labeled stub and no fake repository is invented. `/api/health` reports `githubAuth` as `"token"` or `"public"` and `synthesis` as `"llm"` or `"heuristic"`.
 
-## Railway deploy from GitHub
+## Railway deploy (optional alternative)
+
+The public demo is already at https://evidence-agent-ten.vercel.app. Use these steps only to host a separate copy.
 
 1. In [Railway](https://railway.com): **New Project → Deploy from GitHub repo**.
 2. Select `bryko254/open-agent-hackathon-2026`.
@@ -103,6 +113,9 @@ railway.toml
 
 ## Submission checklist
 
+- [x] Open https://evidence-agent-ten.vercel.app
+- [x] Confirm https://evidence-agent-ten.vercel.app/api/health (`{ "ok": true }`)
+- [x] Run the Railway + Next.js sample on the live app
 - [x] Track 02 — The Agent That Can Explain Why (goal → tools → cited outcome → why the confidence)
 - [x] UI shows reasoning steps, evidence cards, outcome, and confidence
 - [x] [DEMO.md](./DEMO.md) sample goals for a 60–90s walkthrough
@@ -112,7 +125,7 @@ railway.toml
 - [x] Railway-friendly (`Dockerfile` / `railway.toml` / nixpacks fallback)
 - [x] `.env.example` for optional OpenAI and GitHub tokens
 - [x] MIT license
-- [x] README with track story, local run, and Railway from GitHub
+- [x] README with track story, live demo, local run, and optional Railway deploy
 - [x] No secrets in git
 - [x] `npm install && npm run build` succeeds
 - [x] Public GitHub: https://github.com/bryko254/open-agent-hackathon-2026

@@ -2,16 +2,22 @@
 
 Track 02, **The Agent That Can Explain Why**. Solo entry by [bryko254](https://github.com/bryko254).
 
-No API key is required for the path below. Heuristic mode quotes live pages and explains the confidence score. `OPENAI_API_KEY` only changes the prose. A GitHub token is optional.
+## Live demo
 
-## Before you start
+1. Open https://evidence-agent-ten.vercel.app
+2. Confirm https://evidence-agent-ten.vercel.app/api/health returns `"ok": true`.
+3. Run the prefilled **Railway + Next.js** sample (walkthrough below).
+
+No API key is required. Heuristic mode quotes live pages and explains the confidence score. `OPENAI_API_KEY` only changes the prose. A GitHub token is optional.
+
+## Before you start (local alternative)
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000. Optional: `GET /api/health` should return `"ok": true`, `"synthesis": "heuristic"`, and `"githubAuth": "public"` (or `"token"` if a GitHub token is set).
+Open http://localhost:3000. `GET /api/health` should return `"ok": true`, `"synthesis": "heuristic"`, and `"githubAuth": "public"` (or `"token"` if a GitHub token is set). The walkthrough is the same on the live app.
 
 ## Walkthrough
 
@@ -60,6 +66,14 @@ Check my email and GitHub for threads about the Open Agent Hackathon submission,
 Gmail is excluded on purpose. GitHub is live only if the API responds. Confidence should stay modest when the inbox was never read.
 
 ## curl
+
+Live health:
+
+```bash
+curl -s https://evidence-agent-ten.vercel.app/api/health
+```
+
+Local:
 
 ```bash
 curl -s http://localhost:3000/api/health
