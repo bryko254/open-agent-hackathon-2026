@@ -114,6 +114,20 @@ const STOP = new Set([
   "out",
   "my",
   "me",
+  "one",
+  "ones",
+  "docs",
+  "doc",
+  "documentation",
+  "recommend",
+  "recommends",
+  "recommendation",
+  "guide",
+  "guidance",
+  "page",
+  "website",
+  "site",
+  "official",
 ]);
 
 const QUERY_META = new Set([
@@ -154,6 +168,7 @@ export function goalTerms(goal: string): string[] {
     .replace(/https?:\/\/\S+/g, " ")
     .toLowerCase()
     .split(/[^a-z0-9+#.]+/)
+    .map((word) => word.replace(/^\.+|\.+$/g, ""))
     .filter((word) => word.length > 2 && !STOP.has(word));
   return preferLongerInflection([...new Set(raw)]).slice(0, 12);
 }
@@ -190,7 +205,13 @@ export function cleanExcerpt(text: string): string {
 
 export function overlapOf(text: string, terms: string[]): string[] {
   const lower = text.toLowerCase();
-  return terms.filter((term) => lower.includes(term));
+  return terms.filter((term) => {
+    if (lower.includes(term)) return true;
+    if (term.endsWith("ing") && term.length > 6 && lower.includes(term.slice(0, -3))) {
+      return true;
+    }
+    return false;
+  });
 }
 
 export function clipSentence(text: string, max: number): string {
@@ -208,29 +229,41 @@ export function pickSupport(
   const cleaned = cleanExcerpt(text);
   const sentences = cleaned
     .split(/[.!?]+\s+/)
-    .map((sentence) => sentence.trim())
+    .map((sentence) => sentence.replace(/[:;]\s*\d+$/g, "").trim())
     .filter((sentence) => sentence.length >= 50 && sentence.length <= 420);
-  const pool = sentences.length
-    ? sentences
-    : [cleaned.slice(0, 320)].filter(Boolean);
+  const prose = sentences.filter((sentence) => !isNoisySentence(sentence));
+  const pool =
+    prose.length > 0
+      ? prose
+      : sentences.length > 0
+        ? sentences
+        : [cleaned.slice(0, 320)].filter(Boolean);
   if (!pool.length) return { sentence: "", overlap: [] };
 
   let best = pool[0];
   let bestOverlap = overlapOf(best, terms);
-  for (const sentence of pool.slice(1)) {
+  let bestScore = scoreSentence(best, bestOverlap, 0);
+  pool.forEach((sentence, index) => {
     const overlap = overlapOf(sentence, terms);
-    const better =
-      overlap.length > bestOverlap.length ||
-      (overlap.length === bestOverlap.length &&
-        overlap.length > 0 &&
-        sentence.length < best.length);
-    if (better) {
+    const score = scoreSentence(sentence, overlap, index);
+    if (score > bestScore) {
       best = sentence;
       bestOverlap = overlap;
+      bestScore = score;
     }
-  }
+  });
 
   return { sentence: clipSentence(best, 360), overlap: bestOverlap };
+}
+
+function isNoisySentence(sentence: string): boolean {
+  const dashes = (sentence.match(/ - /g) || []).length;
+  const pipes = (sentence.match(/\|/g) || []).length;
+  return dashes >= 2 || pipes >= 2 || sentence.includes("→");
+}
+
+function scoreSentence(sentence: string, overlap: string[], index: number): number {
+  return overlap.length * 10 - index * 0.05;
 }
 
 export function hostOf(url?: string): string {

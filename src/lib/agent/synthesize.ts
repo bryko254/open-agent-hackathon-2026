@@ -30,7 +30,7 @@ export function explainEvidence(
   const live = evidence.filter((item) => item.live);
   const stubs = evidence.filter((item) => !item.live);
   const scored = live.map((item) => {
-    const overlap = overlapOf(`${item.title} ${item.snippet}`, terms);
+    const overlap = overlapOf(item.snippet, terms);
     return {
       item,
       overlap,
@@ -39,7 +39,9 @@ export function explainEvidence(
   });
   const strong = orderForGoal(
     goal,
-    scored.filter((row) => row.supports)
+    scored
+      .filter((row) => row.supports)
+      .sort((a, b) => b.overlap.length - a.overlap.length)
   );
   const weak = scored.filter((row) => !row.supports);
   const strongHosts = [
@@ -122,7 +124,11 @@ function buildOutcome(strong: Scored[], liveCount: number): string {
   }
   return strong
     .slice(0, 2)
-    .map((row) => `${clipSentence(row.item.snippet, 220)} [${row.item.id}]`)
+    .map((row) => {
+      const line = clipSentence(row.item.snippet, 220);
+      const ended = /[.!?…]$/.test(line) ? line : `${line}.`;
+      return `${ended} [${row.item.id}]`;
+    })
     .join(" ");
 }
 
@@ -161,8 +167,10 @@ function buildReason(input: {
   if (input.stubs) {
     reason += ` ${input.stubs} stub card(s) are excluded from confidence.`;
   }
-  if (input.failedFetches) {
-    reason += ` ${input.failedFetches} fetch(es) failed and were left as error steps.`;
+  if (input.failedFetches === 1) {
+    reason += " 1 fetch failed and was left as an error step.";
+  } else if (input.failedFetches > 1) {
+    reason += ` ${input.failedFetches} fetches failed and were left as error steps.`;
   }
   return reason;
 }

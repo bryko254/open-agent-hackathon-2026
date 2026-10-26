@@ -44,8 +44,8 @@ export async function githubSearch(goal: string): Promise<GithubLookup> {
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const endpoint =
-    "https://api.github.com/search/repositories?sort=stars&order=desc&per_page=2&q=" +
-    encodeURIComponent(query);
+    "https://api.github.com/search/repositories?sort=stars&order=desc&per_page=5&q=" +
+    encodeURIComponent(`${query} fork:false`);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -76,7 +76,7 @@ export async function githubSearch(goal: string): Promise<GithubLookup> {
         const url = item.html_url || (fullName ? `https://github.com/${fullName}` : "");
         if (!fullName || !url) return null;
         const stars = item.stargazers_count || 0;
-        const description = (item.description || "").trim();
+        const description = (item.description || "").replace(/\s+/g, " ").trim();
         return {
           fullName,
           url,
@@ -86,10 +86,17 @@ export async function githubSearch(goal: string): Promise<GithubLookup> {
             `Public repository ${fullName} with ${stars} stars. GitHub has no description text to quote.`,
         };
       })
-      .filter((item): item is GithubRepo => Boolean(item))
-      .slice(0, 2);
+      .filter((item): item is GithubRepo => Boolean(item));
 
-    if (!repos.length) {
+    const readable = repos.filter(
+      (repo) =>
+        repo.stars >= 20 &&
+        repo.description.length <= 320 &&
+        !repo.description.includes("```")
+    );
+    const chosen = (readable.length ? readable : repos).slice(0, 2);
+
+    if (!chosen.length) {
       return {
         live: false,
         authenticated: Boolean(token),
@@ -106,7 +113,7 @@ export async function githubSearch(goal: string): Promise<GithubLookup> {
       message: token
         ? `Live GitHub repository search (authenticated) for “${query}”, ordered by stars.`
         : `Live GitHub repository search for “${query}”, ordered by stars. No token was set, so this used the public API and can be rate-limited.`,
-      repos,
+      repos: chosen,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "GitHub request failed";

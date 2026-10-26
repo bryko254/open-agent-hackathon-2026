@@ -9,7 +9,7 @@ import {
   citesLiveEvidence,
   explainEvidence,
 } from "@/lib/agent/synthesize";
-import { goalTerms, hostOf, pickSupport } from "@/lib/agent/text";
+import { clipSentence, goalTerms, hostOf, pickSupport } from "@/lib/agent/text";
 import {
   planSources,
   shouldSearchGithub,
@@ -355,6 +355,15 @@ export async function runInvestigation(
     });
     const answer = await duckDuckGoAnswer(source.query || goal);
     if (!answer.ok) {
+      const empty = /no instant answer/i.test(answer.error || "");
+      if (empty) {
+        notes.write(answer.error || "DuckDuckGo had no instant answer.");
+        finish(step, {
+          status: "done",
+          detail: `${answer.error} No card was created from an empty result.`,
+        });
+        return;
+      }
       failedFetches += 1;
       finish(step, {
         status: "error",
@@ -416,12 +425,12 @@ export async function runInvestigation(
 
     const ids: string[] = [];
     for (const repo of lookup.repos) {
-      const quote = `${repo.description} ${repo.stars} stars.`;
-      const picked = pickSupport(quote, terms);
+      const picked = pickSupport(repo.description, terms);
+      const sentence = picked.sentence || clipSentence(repo.description, 280);
       const item = addEvidence({
         title: lookup.live ? repo.fullName : "GitHub stub (not a repository)",
         url: repo.url || undefined,
-        snippet: lookup.live ? quote : lookup.message,
+        snippet: lookup.live ? `${sentence.replace(/[.]+$/g, "")}. ${repo.stars} stars.` : lookup.message,
         source: tool,
         why: lookup.live
           ? supportWhy(

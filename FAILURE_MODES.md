@@ -34,7 +34,7 @@ Judges: this document is intentional. Track 02 wants an autonomous agent with ho
 
 ### 5. Wikipedia or DuckDuckGo miss
 
-- **Symptom:** `wiki_summary` or `web_search` is an error step when the query has no article or no instant answer.
+- **Symptom:** `wiki_summary` is an error step when the query has no article. An empty DuckDuckGo instant answer is a done step with no card. Transport failures stay error steps.
 - **Duplicate instant answer:** If DuckDuckGo points at a host already cited (often Wikipedia), the step is **done** and creates no second card. The detail says it refused to count the same site twice.
 - **Same publisher:** Two Wikipedia pages can support an answer and still leave confidence at **medium**, because they are not independent sites.
 
