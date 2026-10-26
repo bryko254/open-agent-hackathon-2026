@@ -3,7 +3,10 @@ export type ToolName =
   | "notes_write"
   | "notes_read"
   | "gmail_stub"
-  | "github_stub";
+  | "github_search"
+  | "github_stub"
+  | "wiki_summary"
+  | "web_search";
 
 export type StepStatus = "pending" | "running" | "done" | "error" | "skipped";
 
@@ -14,6 +17,10 @@ export interface EvidenceCitation {
   snippet: string;
   source: ToolName | "memory" | "llm";
   fetchedAt: string;
+  /** Why this source was opened, and whether the quote shares the goal's words. */
+  why: string;
+  /** False for labeled stubs. Stubs do not raise confidence. */
+  live: boolean;
 }
 
 export interface AgentStep {
@@ -34,6 +41,7 @@ export interface InvestigationResult {
   outcome: string;
   summary: string;
   confidence: "low" | "medium" | "high";
+  confidenceReason: string;
   steps: AgentStep[];
   evidence: EvidenceCitation[];
   notes: string[];

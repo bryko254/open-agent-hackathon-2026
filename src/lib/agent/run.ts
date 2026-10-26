@@ -1,31 +1,42 @@
 import { NotesMemory } from "@/lib/tools/notes";
 import { webFetch } from "@/lib/tools/web-fetch";
 import { gmailStubSearch } from "@/lib/tools/gmail-stub";
-import { githubStubSearch } from "@/lib/tools/github-stub";
+import { githubSearch } from "@/lib/tools/github";
+import { duckDuckGoAnswer, wikipediaLookup } from "@/lib/tools/public-research";
 import { chatCompletion, hasLlm } from "@/lib/agent/llm";
-import { researchTargets, wantsEmail, wantsGithub } from "@/lib/agent/urls";
+import {
+  capConfidence,
+  citesLiveEvidence,
+  explainEvidence,
+} from "@/lib/agent/synthesize";
+import { goalTerms, hostOf, pickSupport } from "@/lib/agent/text";
+import {
+  planSources,
+  shouldSearchGithub,
+  wantsEmail,
+  type PlannedSource,
+} from "@/lib/agent/urls";
 import type {
   AgentStep,
   EvidenceCitation,
   InvestigationResult,
+  ToolName,
 } from "@/lib/agent/types";
 
 function now() {
   return new Date().toISOString();
 }
 
-function sid(prefix: string, i: number) {
-  return `${prefix}-${i}`;
-}
-
-function snippet(text: string, n = 280): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  return t.length <= n ? t : t.slice(0, n - 1) + "…";
+function supportWhy(planWhy: string, overlap: string[]): string {
+  if (overlap.length) {
+    return `${planWhy} The quoted line shares these goal words: ${overlap.join(", ")}.`;
+  }
+  return `${planWhy} The excerpt does not reuse the goal's distinctive words, so it is weak support.`;
 }
 
 /**
  * Multi-step Evidence Agent loop:
- * plan → tool calls (web + notes + optional stubs) → synthesize with citations.
+ * plan → live sources (docs, Wikipedia, GitHub) → notes → cited explanation.
  */
 export async function runInvestigation(
   goal: string,
@@ -37,7 +48,9 @@ export async function runInvestigation(
   const steps: AgentStep[] = [];
   const evidence: EvidenceCitation[] = [];
   let evidenceCounter = 0;
+  let failedFetches = 0;
   const mode = hasLlm() ? "llm" : "heuristic";
+  const terms = goalTerms(goal);
 
   const pushStep = (
     partial: Omit<AgentStep, "id" | "index" | "status"> & {
@@ -45,13 +58,16 @@ export async function runInvestigation(
     }
   ): AgentStep => {
     const step: AgentStep = {
-      id: sid("step", steps.length + 1),
+      id: `step-${steps.length + 1}`,
       index: steps.length + 1,
       status: partial.status || "running",
-      ...partial,
       tool: partial.tool,
       title: partial.title,
       detail: partial.detail,
+      startedAt: partial.startedAt,
+      finishedAt: partial.finishedAt,
+      evidenceIds: partial.evidenceIds,
+      error: partial.error,
     };
     steps.push(step);
     return step;
@@ -61,167 +77,138 @@ export async function runInvestigation(
     Object.assign(step, patch, { finishedAt: now() });
   };
 
-  // --- Step 1: Plan ---
+  const room = () => steps.length < maxSteps - 1;
+
+  const addEvidence = (
+    draft: Omit<EvidenceCitation, "id" | "fetchedAt">
+  ): EvidenceCitation => {
+    evidenceCounter += 1;
+    const item: EvidenceCitation = {
+      ...draft,
+      id: `E${evidenceCounter}`,
+      fetchedAt: now(),
+    };
+    evidence.push(item);
+    notes.write(`[${item.id}] ${item.title} — ${item.snippet}`);
+    return item;
+  };
+
+  const sources = planSources(goal, 3);
+  const useGmail = wantsEmail(goal);
+  const useGithub = shouldSearchGithub(goal, sources);
+
   const planStep = pushStep({
     tool: "plan",
     title: "Plan investigation",
-    detail: `Goal: ${goal}`,
+    detail: sources
+      .map((source) => `${source.label}: ${source.why}`)
+      .concat(
+        useGithub
+          ? [
+              "GitHub search: repository results are ordered by stars, which is a popularity signal rather than proof.",
+            ]
+          : [],
+        useGmail
+          ? [
+              "Gmail: the goal mentions mail, and this build will show a labeled stub because no mailbox is connected.",
+            ]
+          : []
+      )
+      .join(" "),
     startedAt: now(),
   });
-
-  const urls = researchTargets(goal, Math.min(3, maxSteps - 3));
-  const useGmail = wantsEmail(goal);
-  const useGithub = wantsGithub(goal);
-
   notes.write(`Investigation goal: ${goal}`);
-  notes.write(
-    `Plan: fetch ${urls.length} source(s)` +
-      (useGmail ? ", stub Gmail" : "") +
-      (useGithub ? ", stub GitHub" : "") +
-      `, then synthesize with citations. Mode=${mode}.`
-  );
-
+  notes.write(`Mode: ${mode}.`);
   finish(planStep, {
     status: "done",
-    detail: `Planned ${urls.length} web fetch(es)` +
-      (useGmail ? " + Gmail stub" : "") +
-      (useGithub ? " + GitHub stub" : "") +
-      `.`,
-    evidenceIds: [],
+    detail: planStep.detail,
   });
 
-  // --- Web fetches ---
-  for (const url of urls) {
-    if (steps.length >= maxSteps - 1) break;
+  for (const source of sources) {
+    if (!room()) break;
+    if (source.id === "web_fetch" && source.url) {
+      await fetchWeb(source.url, source);
+    } else if (source.id === "wiki_summary" && source.query) {
+      await fetchWiki(source);
+    } else if (source.id === "web_search" && source.query) {
+      await fetchInstant(source);
+    }
+  }
 
+  if (useGithub && room()) {
+    await fetchGithub();
+  }
+
+  if (useGmail && room()) {
     const step = pushStep({
-      tool: "web_fetch",
-      title: `Fetch evidence: ${new URL(url).hostname}`,
-      detail: url,
+      tool: "gmail_stub",
+      title: "Gmail connector (labeled stub)",
+      detail: "No OAuth mailbox is connected in this build.",
       startedAt: now(),
     });
+    const stub = gmailStubSearch(goal);
+    const item = addEvidence({
+      title: "Gmail stub (no mailbox connected)",
+      snippet: stub.message,
+      source: "gmail_stub",
+      why: "The goal mentions email. This card exists so the missing mailbox is visible. It is not a message from an inbox.",
+      live: false,
+    });
+    finish(step, {
+      status: "done",
+      detail: stub.message,
+      evidenceIds: [item.id],
+    });
+  }
 
-    const result = await webFetch(url);
-    if (result.ok && result.text) {
-      evidenceCounter += 1;
-      const id = `E${evidenceCounter}`;
-      evidence.push({
-        id,
-        title: result.title,
-        url: result.url,
-        snippet: snippet(result.text),
-        source: "web_fetch",
-        fetchedAt: now(),
-      });
-      notes.write(`[${id}] ${result.title} — ${snippet(result.text, 160)}`);
-      finish(step, {
-        status: "done",
-        detail: `Retrieved ${result.text.length} chars from ${result.url}`,
-        evidenceIds: [id],
-      });
-    } else {
-      notes.write(`Fetch failed for ${url}: ${result.error || "unknown"}`);
-      finish(step, {
-        status: "error",
-        detail: `Failed: ${result.error || "unknown"}`,
-        error: result.error,
-      });
-    }
-
-    const noteStep = pushStep({
+  if (room()) {
+    const step = pushStep({
       tool: "notes_write",
       title: "Update investigation notes",
-      detail: `Persisted findings after ${new URL(url).hostname}`,
+      detail: `Stored ${notes.read().length} note(s) before synthesis.`,
       startedAt: now(),
       status: "done",
       finishedAt: now(),
     });
-    void noteStep;
+    void step;
   }
 
-  // --- Optional stubs ---
-  if (useGmail && steps.length < maxSteps) {
+  if (room()) {
     const step = pushStep({
-      tool: "gmail_stub",
-      title: "Gmail connector (stub)",
-      detail: `Search mailbox for: ${goal.slice(0, 80)}`,
+      tool: "notes_read",
+      title: "Read investigation memory",
+      detail: "Compile notes before synthesis",
       startedAt: now(),
     });
-    const stub = gmailStubSearch(goal);
-    notes.write(`Gmail stub: ${stub.message}`);
-    evidenceCounter += 1;
-    const id = `E${evidenceCounter}`;
-    evidence.push({
-      id,
-      title: "Gmail stub sample hit",
-      snippet: stub.sample.hits[0]?.snippet || stub.message,
-      source: "gmail_stub",
-      fetchedAt: now(),
-    });
+    const allNotes = notes.read();
     finish(step, {
       status: "done",
-      detail: stub.message,
-      evidenceIds: [id],
+      detail: `${allNotes.length} note(s) in memory`,
     });
   }
 
-  if (useGithub && steps.length < maxSteps) {
-    const step = pushStep({
-      tool: "github_stub",
-      title: "GitHub connector (stub)",
-      detail: `Search repos for: ${goal.slice(0, 80)}`,
-      startedAt: now(),
-    });
-    const stub = githubStubSearch(goal);
-    notes.write(`GitHub stub: ${stub.message}`);
-    evidenceCounter += 1;
-    const id = `E${evidenceCounter}`;
-    evidence.push({
-      id,
-      title: stub.sample.repos[0]?.full_name || "GitHub stub",
-      snippet: stub.sample.repos[0]?.description || stub.message,
-      source: "github_stub",
-      fetchedAt: now(),
-    });
-    finish(step, {
-      status: "done",
-      detail: stub.message,
-      evidenceIds: [id],
-    });
-  }
+  const explained = explainEvidence(goal, evidence, failedFetches);
+  let summary = explained.summary;
+  let outcome = explained.outcome;
+  let confidence = explained.confidence;
+  let confidenceReason = explained.confidenceReason;
 
-  // --- Read notes ---
-  const readStep = pushStep({
-    tool: "notes_read",
-    title: "Read investigation memory",
-    detail: "Compile notes before synthesis",
-    startedAt: now(),
-  });
-  const allNotes = notes.read();
-  finish(readStep, {
-    status: "done",
-    detail: `${allNotes.length} note(s) in memory`,
-  });
-
-  // --- Synthesize ---
   const synth = pushStep({
     tool: "synthesize",
-    title: "Synthesize evidence-backed answer",
-    detail: "Produce outcome + citations",
+    title: "Explain the answer from the citations",
+    detail: "Quote supporting lines, say what was left out, and set confidence.",
     startedAt: now(),
   });
 
-  const citationBlock = evidence
-    .map((e) => `[${e.id}] ${e.title}${e.url ? ` (${e.url})` : ""}: ${e.snippet}`)
-    .join("\n");
-
-  let summary = "";
-  let outcome = "";
-
-  if (mode === "llm") {
+  if (mode === "llm" && evidence.some((item) => item.live)) {
     const llmOut = await chatCompletion(
-      "You are Evidence Agent. Answer using ONLY the provided evidence. Cite as [E1], [E2], etc. Return JSON with keys: outcome (1 short sentence concrete result), summary (2-4 paragraphs with citations), confidence (low|medium|high).",
-      `GOAL:\n${goal}\n\nEVIDENCE:\n${citationBlock}\n\nNOTES:\n${allNotes.join("\n")}`
+      "You are Evidence Agent. Rewrite the draft so a reader can see why the citations support the outcome. Use ONLY the evidence. Every factual sentence must include a citation like [E1] that exists in the evidence. Do not treat live:false stubs as facts. If evidence is thin, say so. Return JSON with keys outcome (1-2 sentences with citations), summary (markdown with the headings '## Why this is the answer', '## What each source contributes', '## How the sources fit', '## Left out on purpose', '## Confidence'), confidence (low|medium|high).",
+      `GOAL:\n${goal}\n\nEVIDENCE:\n${evidence
+        .map(
+          (item) =>
+            `[${item.id}] live=${item.live} ${item.title}${item.url ? ` (${item.url})` : ""}\nwhy: ${item.why}\nquote: ${item.snippet}`
+        )
+        .join("\n\n")}\n\nDRAFT OUTCOME:\n${explained.outcome}\n\nDRAFT REASON:\n${explained.confidenceReason}`
     );
 
     if (llmOut) {
@@ -233,72 +220,223 @@ export async function runInvestigation(
             summary?: string;
             confidence?: string;
           };
-          outcome = parsed.outcome || "";
-          summary = parsed.summary || "";
-        } else {
-          summary = llmOut;
-          outcome = "Completed LLM synthesis over collected evidence.";
+          if (parsed.summary && citesLiveEvidence(parsed.summary, evidence)) {
+            summary = parsed.summary;
+          }
+          if (parsed.outcome && citesLiveEvidence(parsed.outcome, evidence)) {
+            outcome = parsed.outcome;
+          }
+          const capped = capConfidence(parsed.confidence, explained.confidence);
+          if (parsed.confidence && capped !== parsed.confidence) {
+            confidenceReason += ` The model suggested ${parsed.confidence}; the shown level is capped by the live sources.`;
+          }
+          confidence = capped;
         }
       } catch {
-        summary = llmOut;
-        outcome = "Completed LLM synthesis over collected evidence.";
+        // Heuristic explanation remains.
       }
     }
   }
 
-  if (!summary) {
-    const live = evidence.filter((e) => e.source === "web_fetch");
-    const stubs = evidence.filter((e) =>
-      e.source === "gmail_stub" || e.source === "github_stub"
-    );
-
-    outcome =
-      live.length > 0
-        ? `Gathered ${live.length} live web source(s) and ${stubs.length} stub connector hit(s) addressing: ${goal.slice(0, 100)}`
-        : `Investigation completed with limited live evidence for: ${goal.slice(0, 100)}`;
-
-    summary =
-      `## Answer\n\n` +
-      `Based on a multi-step investigation for **${goal}**, the agent collected ` +
-      `${evidence.length} evidence item(s).\n\n` +
-      (live.length
-        ? live
-            .map(
-              (e) =>
-                `### ${e.title}\n\n${e.snippet}\n\nCitation: [${e.id}]${e.url ? ` ${e.url}` : ""}`
-            )
-            .join("\n\n")
-        : `_No successful web fetches — see steps for errors and FAILURE_MODES.md._`) +
-      (stubs.length
-        ? `\n\n### Connector stubs\n\n` +
-          stubs.map((e) => `- [${e.id}] ${e.title}: ${e.snippet}`).join("\n")
-        : "") +
-      `\n\n### Concrete outcome\n\n${outcome}`;
-  }
-
-  const confidence =
-    evidence.filter((e) => e.source === "web_fetch").length >= 2
-      ? "high"
-      : evidence.some((e) => e.source === "web_fetch")
-        ? "medium"
-        : "low";
-
   finish(synth, {
     status: "done",
     detail: `Synthesis complete (${mode}, confidence=${confidence})`,
-    evidenceIds: evidence.map((e) => e.id),
+    evidenceIds: evidence.map((item) => item.id),
   });
 
   return {
     goal,
     outcome,
     summary,
-    confidence: confidence as InvestigationResult["confidence"],
+    confidence,
+    confidenceReason,
     steps,
     evidence,
-    notes: allNotes,
+    notes: notes.read(),
     mode,
     durationMs: Date.now() - started,
     createdAt,
   };
+
+  async function fetchWeb(url: string, source: PlannedSource) {
+    const step = pushStep({
+      tool: "web_fetch",
+      title: `Fetch ${source.label}`,
+      detail: source.why,
+      startedAt: now(),
+    });
+    const result = await webFetch(url);
+    if (result.ok && result.text) {
+      const picked = pickSupport(result.text, terms);
+      if (!picked.sentence) {
+        failedFetches += 1;
+        notes.write(`Fetch had no citable sentence: ${result.url}`);
+        finish(step, {
+          status: "error",
+          detail: "Page loaded but no sentence was long enough to cite.",
+          error: "No citable sentence",
+        });
+        return;
+      }
+      const item = addEvidence({
+        title: result.title,
+        url: result.url,
+        snippet: picked.sentence,
+        source: "web_fetch",
+        why: supportWhy(source.why, picked.overlap),
+        live: true,
+      });
+      finish(step, {
+        status: "done",
+        detail: `${source.why} Cited ${item.id} from ${result.url}.`,
+        evidenceIds: [item.id],
+      });
+      return;
+    }
+    failedFetches += 1;
+    notes.write(`Fetch failed for ${url}: ${result.error || "unknown"}`);
+    finish(step, {
+      status: "error",
+      detail: `Failed: ${result.error || "unknown"}`,
+      error: result.error,
+    });
+  }
+
+  async function fetchWiki(source: PlannedSource) {
+    const step = pushStep({
+      tool: "wiki_summary",
+      title: "Read Wikipedia summaries",
+      detail: source.why,
+      startedAt: now(),
+    });
+    const lookup = await wikipediaLookup(source.query || goal);
+    if (!lookup.ok) {
+      failedFetches += 1;
+      finish(step, {
+        status: "error",
+        detail: lookup.error || "Wikipedia lookup failed",
+        error: lookup.error,
+      });
+      return;
+    }
+
+    const ids: string[] = [];
+    lookup.pages.forEach((page, index) => {
+      const picked = pickSupport(page.text, terms);
+      const sentence = picked.sentence || page.text.slice(0, 280);
+      const item = addEvidence({
+        title: page.title,
+        url: page.url,
+        snippet: sentence,
+        source: "wiki_summary",
+        why: supportWhy(
+          index === 0
+            ? source.why
+            : "Second Wikipedia hit for the same query. It is the same publisher, so it cannot by itself make confidence high.",
+          picked.overlap
+        ),
+        live: true,
+      });
+      ids.push(item.id);
+    });
+    finish(step, {
+      status: "done",
+      detail: `Cited ${ids.join(", ")} for “${source.query}”.`,
+      evidenceIds: ids,
+    });
+  }
+
+  async function fetchInstant(source: PlannedSource) {
+    const step = pushStep({
+      tool: "web_search",
+      title: "Check DuckDuckGo instant answer",
+      detail: source.why,
+      startedAt: now(),
+    });
+    const answer = await duckDuckGoAnswer(source.query || goal);
+    if (!answer.ok) {
+      failedFetches += 1;
+      finish(step, {
+        status: "error",
+        detail: answer.error || "No instant answer",
+        error: answer.error,
+      });
+      return;
+    }
+
+    const host = hostOf(answer.url);
+    const already = evidence.find((item) => item.live && host && hostOf(item.url) === host);
+    if (already) {
+      notes.write(
+        `DuckDuckGo instant answer points at ${answer.url}, already covered by ${already.id}. Not counted twice.`
+      );
+      finish(step, {
+        status: "done",
+        detail: `Skipped as a new citation. The instant answer points at ${answer.url}, and ${already.id} already cites that site. Counting it again would look like a second source.`,
+      });
+      return;
+    }
+
+    const picked = pickSupport(answer.text, terms);
+    const item = addEvidence({
+      title: answer.title,
+      url: answer.url,
+      snippet: picked.sentence || answer.text,
+      source: "web_search",
+      why: supportWhy(
+        "DuckDuckGo's instant answer is a short public abstract, included because its URL is not already in the evidence.",
+        picked.overlap
+      ),
+      live: true,
+    });
+    finish(step, {
+      status: "done",
+      detail: `Cited ${item.id} from ${answer.url}.`,
+      evidenceIds: [item.id],
+    });
+  }
+
+  async function fetchGithub() {
+    const lookup = await githubSearch(goal);
+    const tool: ToolName = lookup.live ? "github_search" : "github_stub";
+    const step = pushStep({
+      tool,
+      title: lookup.live ? "Search GitHub repositories" : "GitHub connector (labeled stub)",
+      detail: lookup.message,
+      startedAt: now(),
+    });
+
+    if (!lookup.repos.length) {
+      finish(step, {
+        status: "done",
+        detail: lookup.message,
+      });
+      return;
+    }
+
+    const ids: string[] = [];
+    for (const repo of lookup.repos) {
+      const quote = `${repo.description} ${repo.stars} stars.`;
+      const picked = pickSupport(quote, terms);
+      const item = addEvidence({
+        title: lookup.live ? repo.fullName : "GitHub stub (not a repository)",
+        url: repo.url || undefined,
+        snippet: lookup.live ? quote : lookup.message,
+        source: tool,
+        why: lookup.live
+          ? supportWhy(
+              `Selected from a star-sorted GitHub search for “${lookup.query}”. Stars measure popularity, not whether the README answers the goal.`,
+              picked.overlap
+            )
+          : lookup.message,
+        live: lookup.live,
+      });
+      ids.push(item.id);
+    }
+    finish(step, {
+      status: "done",
+      detail: lookup.message,
+      evidenceIds: ids,
+    });
+  }
 }
